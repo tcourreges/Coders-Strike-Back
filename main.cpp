@@ -11,6 +11,8 @@ using namespace std;
  * YOU DO NOT NEED TO MODIFY THE INITIALIZATION OF THE GAME VARIABLES.
  **/
 
+constexpr int maxThrust = 100;
+
 int main()
 {
 
@@ -29,7 +31,7 @@ int main()
         // Edit this line to output the target position
         // and thrust (0 <= thrust <= 100)
         // i.e.: "x y thrust"
-        cout << nextCheckpointX << " " << nextCheckpointY << " 50" << endl;
+        cout << nextCheckpointX << " " << nextCheckpointY << " " << maxThrust << endl;
 
 
     }
