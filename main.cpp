@@ -12,8 +12,12 @@ using namespace std;
 
 constexpr int maxThrust = 100;
 
+constexpr int boostAngleThreshold = 15;
+constexpr int boostDistanceThreshold = 1000;
+
 int main()
 {
+    bool canBoost = true;
 
     // game loop
     while (1) {
@@ -38,7 +42,25 @@ int main()
         cout << nextCheckpointX << " " << nextCheckpointY << " ";
 
         const int angle = abs(nextCheckpointAngle);
-        cout << ( (angle > 90) ? 0 : maxThrust );
+        if (angle > 90)
+        {
+            cout << 0;
+        }
+        else
+        {
+            const bool useBoost = canBoost
+                                  && (angle < boostAngleThreshold)
+                                  && (nextCheckpointDist > boostDistanceThreshold);
+            if (useBoost)
+            {
+                cout << "BOOST";
+                canBoost = false;
+            }
+            else
+            {
+                cout << maxThrust;
+            }
+        }
 
         cout << endl;
     }
