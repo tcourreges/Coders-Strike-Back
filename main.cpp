@@ -10,6 +10,8 @@ using namespace std;
  * the standard input according to the problem statement.
  **/
 
+constexpr int maxThrust = 100;
+
 int main()
 {
 
@@ -33,6 +35,11 @@ int main()
         // You have to output the target position
         // followed by the power (0 <= thrust <= 100)
         // i.e.: "x y thrust"
-        cout << nextCheckpointX << " " << nextCheckpointY << " 80" << endl;
+        cout << nextCheckpointX << " " << nextCheckpointY << " ";
+
+        const int angle = abs(nextCheckpointAngle);
+        cout << ( (angle > 90) ? 0 : maxThrust );
+
+        cout << endl;
     }
 }
