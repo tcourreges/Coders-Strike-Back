@@ -69,11 +69,13 @@ class Pod
         int checkpointId;
 
         bool canBoost;
+        int shieldCooldown;
 
         Vector2 target;
         int thrust;
 
         bool useBoost;
+        bool useShield;
 
     public:
         Pod() :
@@ -82,9 +84,11 @@ class Pod
             , angle(0)
             , checkpointId(0)
             , canBoost(true)
+            , shieldCooldown(0)
             , target(0, 0)
             , thrust(maxThrust)
             , useBoost(false)
+            , useShield(false)
         {
         }
 
@@ -93,6 +97,10 @@ class Pod
             cout << target.x << " " << target.y << " ";
             if (useBoost)
                 cout << "BOOST";
+            else if (useShield)
+                cout << "SHIELD";
+            else if (shieldCooldown > 0)
+                cout << 0;
             else
                 cout << thrust;
             cout << endl;
@@ -106,8 +114,15 @@ class Pod
         //------------------------------------------------------------
         void SetThrust(int parThrust) { thrust = parThrust; }
         void SetTarget(const Vector2& parTarget) { target = parTarget; }
+        void RequestShield()
+        {
+           useShield = true;
+           shieldCooldown = 3;
+        }
         void RequestBoost()
         {
+            if (shieldCooldown > 0)
+                return;
             if (!canBoost)
                 return;
             useBoost = true;
@@ -132,7 +147,10 @@ class Pod
             this->checkpointId = nextCheckPointId;
 
             // also update those values
+            this->useShield = false;
             this->useBoost = false;
+            if (this->shieldCooldown > 0)
+                --this->shieldCooldown;
         }
 };
 
@@ -155,6 +173,19 @@ int ComputeBestBoostIndex(const vector<Vector2>& checkpoints)
     }
 
     return bestBoostIndex;
+}
+
+bool ShouldUseShield(const Pod& a, const Pod& b)
+{
+    const Vector2 aNextPos = a.Position()+a.Speed();
+    const Vector2 bNextPos = b.Position()+b.Speed();
+    const bool collision = distSqr(aNextPos, bNextPos) < (2*420)*(2*420);
+    if (!collision)
+        return false;
+
+    const Vector2 dirTarget = (a.Target() - a.Position()).normalized();
+    const Vector2 dirB = (b.Position() - a.Position()).normalized();
+    return dot(dirTarget, dirB) > 0.3f;
 }
 
 bool ComputeThrust(Pod& p, int checkpointToBoost)
@@ -232,6 +263,11 @@ int main()
             Pod& p = myPods[i];
 
             p.SetTarget(checkpoints[p.CheckpointId()]);
+
+            if (ShouldUseShield(p, myPods[1-i])
+                || ShouldUseShield(p, opponentPods[0])
+                || ShouldUseShield(p, opponentPods[1]))
+                p.RequestShield();
 
             ComputeThrust(p, checkpointToBoost);
         }
