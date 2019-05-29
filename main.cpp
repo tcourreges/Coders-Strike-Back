@@ -67,6 +67,7 @@ class Pod
         Vector2 dPos;
         int angle;
         int checkpointId;
+        int lap;
 
         bool canBoost;
         int shieldCooldown;
@@ -83,6 +84,7 @@ class Pod
             , dPos(0, 0)
             , angle(0)
             , checkpointId(0)
+            , lap(0)
             , canBoost(true)
             , shieldCooldown(0)
             , target(0, 0)
@@ -109,7 +111,8 @@ class Pod
         const Vector2& Position() const { return pos; }
         const Vector2& Speed() const { return dPos; }
         float Angle() const { return angle; }
-        float CheckpointId() const { return checkpointId; }
+        int CheckpointId() const { return checkpointId; }
+        int Lap() const { return lap; }
         const Vector2& Target() const { return target; }
         //------------------------------------------------------------
         void SetThrust(int parThrust) { thrust = parThrust; }
@@ -144,7 +147,12 @@ class Pod
             this->pos = Vector2(x,y);
             this->dPos = Vector2(vx, vy);
             this->angle = angle;
-            this->checkpointId = nextCheckPointId;
+            if(this->checkpointId != nextCheckPointId)
+            {
+                this->checkpointId = nextCheckPointId;
+                if (nextCheckPointId == 0)
+                    ++(this->lap);
+            }
 
             // also update those values
             this->useShield = false;
@@ -227,6 +235,66 @@ bool ComputeThrust(Pod& p, int checkpointToBoost)
     }
 }
 
+int IsAhead(const Pod& a, const Pod& b, const vector<Vector2>& checkpoints)
+{
+    if (a.Lap() !=  b.Lap())
+        return a.Lap()>b.Lap();
+
+    if (a.CheckpointId() != b.CheckpointId())
+        return a.CheckpointId() > b.CheckpointId();
+
+    const int cpId = a.CheckpointId();
+    // Assert(cpId < checkpoints.size());
+    const Vector2& cp = checkpoints[cpId];
+    return distSqr(a.Position(), cp) < distSqr(b.Position(), cp);
+}
+
+Vector2 ComputeInterceptionTarget(const Pod& p, const Pod& o, const vector<Vector2>& checkpoints)
+{
+    // can we intercept o on its way to its current checkpoint ?
+    const bool goForO = [&]() -> bool
+    {
+        const Vector2 cp = checkpoints[o.CheckpointId()];
+        const Vector2 oTrajectory = (cp - p.Position());
+
+        const Vector2 po = (o.Position() - p.Position());
+
+        // must be in opposite directions
+        if (dot(po, oTrajectory) > 0)
+            return false;
+
+        // must be closer to checkpoint than p
+        if (distSqr(p.Position(), cp) > distSqr(o.Position(), cp))
+            return false;
+
+        return true;
+    }();
+    if (goForO)
+        return o.Position() + 3.f * o.Speed();
+
+
+    // let's look for the next checkpoint where we can wait for p
+    float oDistance = 0; // distance it takes o to reach current oPos (going through checkpoints)
+    Vector2 oPos = o.Position();
+    int i = 0;
+    while (i<checkpoints.size())
+    {
+        // try 1 checkpoint further
+        const int cpId = (o.CheckpointId()+i) % (checkpoints.size());
+        const Vector2 nextCp = checkpoints[cpId];
+
+        oDistance += dist(oPos, nextCp);
+        const float pDistance = dist(p.Position(), nextCp);
+
+        oPos = nextCp;
+        ++i;
+
+        if (pDistance < oDistance)
+            break;
+    }
+    return oPos;
+}
+
 int main()
 {
     vector<Pod> myPods(2);
@@ -257,6 +325,9 @@ int main()
         for (int i = 0; i < 2; i++)
             opponentPods[i].UpdatePodFromInput();
 
+        const int racingPodIndex = IsAhead(myPods[0], myPods[1], checkpoints) ? 0 : 1;
+        const int opponentPodToInterceptIndex = IsAhead(opponentPods[0], opponentPods[1], checkpoints) ? 0 : 1;
+
         for (int i=0; i<2; i++)
         {
             cerr << endl << "=== Pod " << i << " ==========" << endl;
@@ -264,8 +335,24 @@ int main()
 
             p.SetTarget(checkpoints[p.CheckpointId()]);
 
-            if (ShouldUseShield(p, myPods[1-i])
-                || ShouldUseShield(p, opponentPods[0])
+            if (i==racingPodIndex)
+            {
+                cerr << "going to checkpoint" << p.CheckpointId() << endl;
+                p.SetTarget(checkpoints[p.CheckpointId()]);
+
+                if (ShouldUseShield(p, myPods[1-i]))
+                    p.RequestShield();
+            }
+            else
+            {
+                cerr << "intercepting enemy pod " << opponentPodToInterceptIndex << endl;
+                const Pod& o = opponentPods[opponentPodToInterceptIndex];
+
+                const Vector2 interceptionTarget = ComputeInterceptionTarget(p, o, checkpoints);
+                p.SetTarget(interceptionTarget);
+            }
+
+            if( ShouldUseShield(p, opponentPods[0])
                 || ShouldUseShield(p, opponentPods[1]))
                 p.RequestShield();
 
