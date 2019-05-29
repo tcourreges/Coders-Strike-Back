@@ -2,29 +2,122 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <math.h>
 
 using namespace std;
 
-/**
- * Auto-generated code below aims at helping you parse
- * the standard input according to the problem statement.
- **/
+constexpr int maxThrust = 100;
+constexpr float checkpointRadius = 600.f;
+constexpr float PI = 3.14;
 
-int main()
+// -------------------------------------------------------------------
+// basic 2D vector to simplify notations
+struct Vector2
 {
-    int laps;
-    cin >> laps; cin.ignore();
-    int checkpointCount;
-    cin >> checkpointCount; cin.ignore();
-    for (int i = 0; i < checkpointCount; i++) {
-        int checkpointX;
-        int checkpointY;
-        cin >> checkpointX >> checkpointY; cin.ignore();
-    }
+    float x;
+    float y;
+    Vector2(float _x, float _y) : x(_x), y(_y) {}
+    Vector2() : x(0.f), y(0.f) {}
 
-    // game loop
-    while (1) {
-        for (int i = 0; i < 2; i++) {
+    Vector2 normalized() const
+    {
+        const float norm = sqrt(x*x+y*y);
+        return Vector2(x/norm, y/norm);
+    }
+};
+bool operator==(const Vector2& a, const Vector2& b)
+{
+    return a.x == b.x && a.y == b.y;
+}
+Vector2 operator+(const Vector2& a, const Vector2& b)
+{
+    return Vector2(a.x+b.x, a.y+b.y);
+}
+Vector2 operator-(const Vector2& a, const Vector2& b)
+{
+    return Vector2(a.x-b.x, a.y-b.y);
+}
+Vector2 operator*(float k, const Vector2& a)
+{
+    return Vector2(k*a.x, k*a.y);
+}
+ostream& operator<<(ostream& os, const Vector2& v)
+{
+    os << v.x << " " << v.y;
+    return os;
+}
+float distSqr(const Vector2& a, const Vector2& b)
+{
+    return (a.x - b.x)*(a.x - b.x) + (a.y - b.y)*(a.y - b.y);
+}
+float dist(const Vector2& a, const Vector2& b)
+{
+    return sqrt(distSqr(a, b));
+}
+float dot(const Vector2& a, const Vector2& b)
+{
+    return a.x*b.x + a.y*b.y;
+}
+// -------------------------------------------------------------------
+
+class Pod
+{
+    private:
+        Vector2 pos;
+        Vector2 dPos;
+        int angle;
+        int checkpointId;
+
+        bool canBoost;
+
+        Vector2 target;
+        int thrust;
+
+        bool useBoost;
+
+    public:
+        Pod() :
+            pos(0, 0)
+            , dPos(0, 0)
+            , angle(0)
+            , checkpointId(0)
+            , canBoost(true)
+            , target(0, 0)
+            , thrust(maxThrust)
+            , useBoost(false)
+        {
+        }
+
+        void output() const
+        {
+            cout << target.x << " " << target.y << " ";
+            if (useBoost)
+                cout << "BOOST";
+            else
+                cout << thrust;
+            cout << endl;
+        }
+        //------------------------------------------------------------
+        const Vector2& Position() const { return pos; }
+        const Vector2& Speed() const { return dPos; }
+        float Angle() const { return angle; }
+        float CheckpointId() const { return checkpointId; }
+        const Vector2& Target() const { return target; }
+        //------------------------------------------------------------
+        void SetThrust(int parThrust) { thrust = parThrust; }
+        void SetTarget(const Vector2& parTarget) { target = parTarget; }
+        void RequestBoost()
+        {
+            if (!canBoost)
+                return;
+            useBoost = true;
+            canBoost = false;
+        }
+        //------------------------------------------------------------
+
+        // i moved the cin management given to this function for readability
+        void UpdatePodFromInput()
+        {
             int x; // x position of your pod
             int y; // y position of your pod
             int vx; // x speed of your pod
@@ -32,25 +125,118 @@ int main()
             int angle; // angle of your pod
             int nextCheckPointId; // next check point id of your pod
             cin >> x >> y >> vx >> vy >> angle >> nextCheckPointId; cin.ignore();
+            // -------------------------------------
+            this->pos = Vector2(x,y);
+            this->dPos = Vector2(vx, vy);
+            this->angle = angle;
+            this->checkpointId = nextCheckPointId;
+
+            // also update those values
+            this->useBoost = false;
         }
-        for (int i = 0; i < 2; i++) {
-            int x2; // x position of the opponent's pod
-            int y2; // y position of the opponent's pod
-            int vx2; // x speed of the opponent's pod
-            int vy2; // y speed of the opponent's pod
-            int angle2; // angle of the opponent's pod
-            int nextCheckPointId2; // next check point id of the opponent's pod
-            cin >> x2 >> y2 >> vx2 >> vy2 >> angle2 >> nextCheckPointId2; cin.ignore();
+};
+
+int ComputeBestBoostIndex(const vector<Vector2>& checkpoints)
+{
+    if (checkpoints.size() < 2)
+        cerr << "forgot to collect the checkpoints";
+
+    int bestBoostIndex = 0;
+    float longestDist = 0.f;
+    for (size_t i=0; i < checkpoints.size(); i++)
+    {
+        const size_t j = (i+1) % checkpoints.size();
+        float curDist = distSqr(checkpoints[i], checkpoints[j]);
+        if (curDist > longestDist)
+        {
+            bestBoostIndex = j;
+            longestDist = curDist;
+        }
+    }
+
+    return bestBoostIndex;
+}
+
+bool ComputeThrust(Pod& p, int checkpointToBoost)
+{
+    if (p.Angle()<1) // we have the right trajectory, just go as fast as possible
+    {
+        p.SetThrust(maxThrust);
+
+        // we can even try to use our boost
+        if (p.CheckpointId() == checkpointToBoost)
+            p.RequestBoost();
+    }
+    else // we need to adjust our trajectory
+    {
+        const Vector2 cp = p.Target();
+
+        // try to avoid drifts
+        p.SetTarget(cp - (3.f * p.Speed()));
+
+        // in order to align, we also need to reduce the thrust
+
+        const float distToCp = dist(cp, p.Position());
+        const float distanceSlowdownFactor = clamp(distToCp/(2.f * checkpointRadius), 0.f, 1.f);
+
+        const float cpAngle = [&]() -> float
+        {
+            const Vector2 dirToCp = (cp - p.Position()).normalized();
+            float res = acos(dirToCp.x) * 180.f / PI;
+            if (dirToCp.y < 0.f)
+                return 360.f - res;
+            else
+                return res;
+        }();
+        const float angle = cpAngle - p.Angle();
+        const float angleSlowdownFactor = 1.f - clamp(abs(angle)/90.f, 0.f, 1.f);
+
+        cerr << "Slowdown: distance " << distanceSlowdownFactor << " - angle " << angleSlowdownFactor << endl;
+        p.SetThrust(maxThrust * distanceSlowdownFactor * angleSlowdownFactor);
+    }
+}
+
+int main()
+{
+    vector<Pod> myPods(2);
+    vector<Pod> opponentPods(2);
+
+    // read checkpoint information
+    int laps;
+    int checkpointCount;
+    {
+        cin >> laps; cin.ignore();
+        cin >> checkpointCount; cin.ignore();
+    }
+    vector<Vector2> checkpoints(checkpointCount);
+    for (int i = 0; i < checkpointCount; i++)
+    {
+        int checkpointX;
+        int checkpointY;
+        cin >> checkpointX >> checkpointY; cin.ignore();
+        checkpoints[i] = Vector2(checkpointX, checkpointY);
+    }
+    const int checkpointToBoost = ComputeBestBoostIndex(checkpoints);
+
+    // game loop
+    while (1)
+    {
+        for (int i = 0; i < 2; i++)
+            myPods[i].UpdatePodFromInput();
+        for (int i = 0; i < 2; i++)
+            opponentPods[i].UpdatePodFromInput();
+
+        for (int i=0; i<2; i++)
+        {
+            cerr << endl << "=== Pod " << i << " ==========" << endl;
+            Pod& p = myPods[i];
+
+            p.SetTarget(checkpoints[p.CheckpointId()]);
+
+            ComputeThrust(p, checkpointToBoost);
         }
 
-        // Write an action using cout. DON'T FORGET THE "<< endl"
-        // To debug: cerr << "Debug messages..." << endl;
-
-
-        // You have to output the target position
-        // followed by the power (0 <= thrust <= 100)
-        // i.e.: "x y thrust"
-        cout << "8000 4500 100" << endl;
-        cout << "8000 4500 100" << endl;
+        myPods[0].output();
+        myPods[1].output();
     }
 }
