@@ -3,12 +3,16 @@
 #include <vector>
 #include <algorithm>
 #include <math.h>
+#include <cstdlib>
 
 using namespace std;
 
 constexpr int maxThrust = 100;
+constexpr int maxRotation = 18;
+
 constexpr float checkpointRadius = 600.f;
-constexpr float PI = 3.14;
+constexpr float checkpointRadiusSqr = checkpointRadius * checkpointRadius;
+constexpr float PI = 3.14159f;
 
 // -------------------------------------------------------------------
 // basic 2D vector to simplify notations
@@ -33,6 +37,10 @@ Vector2 operator+(const Vector2& a, const Vector2& b)
 {
     return Vector2(a.x+b.x, a.y+b.y);
 }
+Vector2 operator+=(Vector2& a, const Vector2& b)
+{
+    a = a+b;
+}
 Vector2 operator-(const Vector2& a, const Vector2& b)
 {
     return Vector2(a.x-b.x, a.y-b.y);
@@ -40,6 +48,10 @@ Vector2 operator-(const Vector2& a, const Vector2& b)
 Vector2 operator*(float k, const Vector2& a)
 {
     return Vector2(k*a.x, k*a.y);
+}
+Vector2 operator*=(Vector2& a, float k)
+{
+    a = k*a;
 }
 ostream& operator<<(ostream& os, const Vector2& v)
 {
@@ -60,306 +72,298 @@ float dot(const Vector2& a, const Vector2& b)
 }
 // -------------------------------------------------------------------
 
-class Pod
+struct Pod
+{
+    int id = -1;
+
+    // state
+    Vector2 position;
+    Vector2 speed;
+    int angle = -1;
+
+    // race status
+    int checkpointId = 0;
+    int checkpointsPassed = 0;
+
+    // boost/shield
+    bool canBoost = true;
+    int shieldCd = 0;
+};
+
+void ManageShield(bool turnOn, Pod& p)
+{
+  if (turnOn)
+    p.shieldCd = 4; // this turn + 3 more
+  else if (p.shieldCd > 0)
+    --p.shieldCd;
+}
+
+void print(const Pod& p)
+{
+    //if(p.id != 0) return;
+
+    cerr << "position: " << p.position << endl;
+    cerr << "speed:    " << p.speed << endl;
+    cerr << "angle:    " << p.angle << endl;
+    cerr << "nextCpId: " << p.checkpointId;
+    cerr << "  passed: " << p.checkpointsPassed << endl;
+    cerr << "canBoost: " << p.canBoost;
+    cerr << "  shieldCd: " << p.shieldCd << endl << endl;
+}
+
+void UpdatePodFromInput(Pod& p, int id)
+{
+    int x, y, vx, vy, angle, nextCheckPointId;
+    cin >> x >> y >> vx >> vy >> angle >> nextCheckPointId; cin.ignore();
+
+    p.id = id;
+    p.position = Vector2(x,y);
+    p.speed = Vector2(vx, vy);
+    p.angle = angle;
+    if (p.checkpointId != nextCheckPointId)
+        ++p.checkpointsPassed;
+    p.checkpointId = nextCheckPointId;
+}
+
+// move of 1 pod, 1 turn
+struct Move
+{
+    int rotation = 0; // -maxRotation, maxRotation
+    int thrust = 0;; // 0, 100
+    bool shield = false;
+    bool boost = false;
+};
+
+// all the moves of 1 turn
+struct Turn
+{
+    Move moves[2];
+};
+
+#define SIMULATIONTURNS 1
+// all the moves to perform the next SIMULATIONTURNS turns
+struct Solution
+{
+    Turn turns[SIMULATIONTURNS];
+};
+
+class Simulation
 {
     private:
-        Vector2 pos;
-        Vector2 dPos;
-        int angle;
-        int checkpointId;
-        int lap;
-
-        bool canBoost;
-        int shieldCooldown;
-
-        Vector2 target;
-        int thrust;
-
-        bool useBoost;
-        bool useShield;
+        vector<Vector2> checkpoints;
+        int checkpointCount;
+        int maxCheckpoints;
 
     public:
-        Pod() :
-            pos(0, 0)
-            , dPos(0, 0)
-            , angle(0)
-            , checkpointId(0)
-            , lap(0)
-            , canBoost(true)
-            , shieldCooldown(0)
-            , target(0, 0)
-            , thrust(maxThrust)
-            , useBoost(false)
-            , useShield(false)
+        Vector2 InitCheckpointsFromInput()
         {
-        }
-
-        void output() const
-        {
-            cout << target.x << " " << target.y << " ";
-            if (useBoost)
-                cout << "BOOST";
-            else if (useShield)
-                cout << "SHIELD";
-            else if (shieldCooldown > 0)
-                cout << 0;
-            else
-                cout << thrust;
-            cout << endl;
-        }
-        //------------------------------------------------------------
-        const Vector2& Position() const { return pos; }
-        const Vector2& Speed() const { return dPos; }
-        float Angle() const { return angle; }
-        int CheckpointId() const { return checkpointId; }
-        int Lap() const { return lap; }
-        const Vector2& Target() const { return target; }
-        //------------------------------------------------------------
-        void SetThrust(int parThrust) { thrust = parThrust; }
-        void SetTarget(const Vector2& parTarget) { target = parTarget; }
-        void RequestShield()
-        {
-           useShield = true;
-           shieldCooldown = 3;
-        }
-        void RequestBoost()
-        {
-            if (shieldCooldown > 0)
-                return;
-            if (!canBoost)
-                return;
-            useBoost = true;
-            canBoost = false;
-        }
-        //------------------------------------------------------------
-
-        // i moved the cin management given to this function for readability
-        void UpdatePodFromInput()
-        {
-            int x; // x position of your pod
-            int y; // y position of your pod
-            int vx; // x speed of your pod
-            int vy; // y speed of your pod
-            int angle; // angle of your pod
-            int nextCheckPointId; // next check point id of your pod
-            cin >> x >> y >> vx >> vy >> angle >> nextCheckPointId; cin.ignore();
-            // -------------------------------------
-            this->pos = Vector2(x,y);
-            this->dPos = Vector2(vx, vy);
-            this->angle = angle;
-            if(this->checkpointId != nextCheckPointId)
+            int laps;
             {
-                this->checkpointId = nextCheckPointId;
-                if (nextCheckPointId == 0)
-                    ++(this->lap);
+                cin >> laps; cin.ignore();
+                cin >> checkpointCount; cin.ignore();
             }
 
-            // also update those values
-            this->useShield = false;
-            this->useBoost = false;
-            if (this->shieldCooldown > 0)
-                --this->shieldCooldown;
+            checkpoints.reserve(checkpointCount);
+            for (int i = 0; i < checkpointCount; i++)
+            {
+                int checkpointX, checkpointY;
+                cin >> checkpointX >> checkpointY; cin.ignore();
+                checkpoints[i] = Vector2(checkpointX, checkpointY);
+            }
+
+            maxCheckpoints = laps*checkpointCount;
+
+            return checkpoints[1];
+        }
+
+        int TestSolution(vector<Pod>& pods, Solution s)
+        {
+            for (int i=0; i<SIMULATIONTURNS; i++)
+            {
+                cerr << "====================" << endl;
+                cerr << "turn: " << i << endl;
+                cerr << "====================" << endl;
+                PlayOneTurn(pods, s.turns[i]);
+            }
+
+            return RateSolution(pods);
+        }
+
+    private:
+        int RateSolution(vector<Pod>& pods)
+        {
+            // TODO
+            return 0;
+        }
+
+        void PlayOneTurn(vector<Pod>& pods, const Turn& moves)
+        {
+            Rotate(pods, moves);
+            Accelerate(pods, moves);
+            Move(pods);
+            Friction(pods);
+            EndTurn(pods);
+        }
+
+        void Rotate(vector<Pod>& pods, const Turn& turn)
+        {
+            for (int i=0; i<2; i++)
+            {
+                Pod& p = pods[i];
+
+                const int rotation = turn.moves[i].rotation;
+                //cerr << "pod " << p.id << " rotates by " << rotation << endl;
+                p.angle = (p.angle + rotation) % 360;
+            }
+        }
+        void Accelerate(vector<Pod>& pods, const Turn& turn)
+        {
+            for (int i=0; i<2; i++)
+            {
+                Pod& p = pods[i];
+
+                // shield
+                ManageShield(turn.moves[i].shield, p);
+                if (p.shieldCd > 0)
+                    continue; // no thrust this turn
+
+                const float angleRad = p.angle * PI / 180.f;
+                const Vector2 direction{cos(angleRad), sin(angleRad)};
+
+                //cerr << direction << endl;
+
+                int thrust = turn.moves[i].thrust;
+
+                //boost
+                if (p.canBoost && turn.moves[i].boost)
+                {
+                    thrust = 650;
+                    p.canBoost = false;
+                }
+
+                p.speed += thrust * direction;
+            }
+        }
+        void Move(vector<Pod>& pods)
+        {
+            for (Pod& p : pods)
+                p.position += p.speed;
+
+            // TODO: manage collisions between pods here
+
+            // collisions with checkpoints
+            for (Pod& p : pods)
+            {
+                if (distSqr(p.position, checkpoints[p.checkpointId]) < checkpointRadiusSqr)
+                {
+                    p.checkpointId = (p.checkpointId + 1) % checkpointCount;
+                    ++p.checkpointsPassed;
+                }
+            }
+        }
+        void Friction(vector<Pod>& pods)
+        {
+            for (Pod& p : pods)
+            {
+                p.speed *= 0.85f;
+            }
+        }
+        void EndTurn(vector<Pod>& pods)
+        {
+            for (Pod& p : pods)
+            {
+                p.speed = Vector2{ (int) p.speed.x, (int) p.speed.y };
+                p.position = Vector2{round(p.position.x), round(p.position.y)};
+
+                print(p);
+            }
         }
 };
 
-int ComputeBestBoostIndex(const vector<Vector2>& checkpoints)
+void ConvertSolutionToOutput(const Solution& sol, vector<Pod>& pods)
 {
-    if (checkpoints.size() < 2)
-        cerr << "forgot to collect the checkpoints";
+    // get the first turn
+    const Turn t = sol.turns[0];
 
-    int bestBoostIndex = 0;
-    float longestDist = 0.f;
-    for (size_t i=0; i < checkpoints.size(); i++)
+    for (int i=0; i<2; i++)
     {
-        const size_t j = (i+1) % checkpoints.size();
-        float curDist = distSqr(checkpoints[i], checkpoints[j]);
-        if (curDist > longestDist)
-        {
-            bestBoostIndex = j;
-            longestDist = curDist;
-        }
+        const Pod& p = pods[i];
+
+        // generate coordinates from the rotation
+        const float angle = (p.angle + t.moves[i].rotation) % 360;
+        const float angleRad = angle * PI / 180.f;
+
+        const Vector2 direction{10000*cos(angleRad),10000*sin(angleRad)};
+        const Vector2 target = p.position + direction;
+        cout << round(target.x) << " " << round(target.y) << " ";
+
+        if (t.moves[i].shield)
+            cout << "SHIELD";
+        else if (t.moves[i].boost)
+            cout << "BOOST";
+        else
+            cout << t.moves[i].thrust;
+        cout << endl;
     }
 
-    return bestBoostIndex;
-}
-
-bool ShouldUseShield(const Pod& a, const Pod& b)
-{
-    const Vector2 aNextPos = a.Position()+a.Speed();
-    const Vector2 bNextPos = b.Position()+b.Speed();
-    const bool collision = distSqr(aNextPos, bNextPos) < (2*420)*(2*420);
-    if (!collision)
-        return false;
-
-    const Vector2 dirTarget = (a.Target() - a.Position()).normalized();
-    const Vector2 dirB = (b.Position() - a.Position()).normalized();
-    return dot(dirTarget, dirB) > 0.3f;
-}
-
-bool ComputeThrust(Pod& p, int checkpointToBoost)
-{
-    if (p.Angle()<1) // we have the right trajectory, just go as fast as possible
+    // those values won't be updated by the input, we have to do it
+    // TODO: move that elsewhere
+    for (int i=0; i<2; i++)
     {
-        p.SetThrust(maxThrust);
+        Pod& p = pods[i];
+        ManageShield(t.moves[i].shield, p);
 
-        // we can even try to use our boost
-        if (p.CheckpointId() == checkpointToBoost)
-            p.RequestBoost();
-    }
-    else // we need to adjust our trajectory
-    {
-        const Vector2 cp = p.Target();
-
-        // try to avoid drifts
-        p.SetTarget(cp - (3.f * p.Speed()));
-
-        // in order to align, we also need to reduce the thrust
-
-        const float distToCp = dist(cp, p.Position());
-        const float distanceSlowdownFactor = clamp(distToCp/(2.f * checkpointRadius), 0.f, 1.f);
-
-        const float cpAngle = [&]() -> float
-        {
-            const Vector2 dirToCp = (cp - p.Position()).normalized();
-            float res = acos(dirToCp.x) * 180.f / PI;
-            if (dirToCp.y < 0.f)
-                return 360.f - res;
-            else
-                return res;
-        }();
-        const float angle = cpAngle - p.Angle();
-        const float angleSlowdownFactor = 1.f - clamp(abs(angle)/90.f, 0.f, 1.f);
-
-        cerr << "Slowdown: distance " << distanceSlowdownFactor << " - angle " << angleSlowdownFactor << endl;
-        p.SetThrust(maxThrust * distanceSlowdownFactor * angleSlowdownFactor);
+        if (p.shieldCd == 0 && t.moves[i].boost)
+            p.canBoost = false;
     }
 }
 
-int IsAhead(const Pod& a, const Pod& b, const vector<Vector2>& checkpoints)
+inline int rnd(int a, int b)
 {
-    if (a.Lap() !=  b.Lap())
-        return a.Lap()>b.Lap();
-
-    if (a.CheckpointId() != b.CheckpointId())
-        return a.CheckpointId() > b.CheckpointId();
-
-    const int cpId = a.CheckpointId();
-    // Assert(cpId < checkpoints.size());
-    const Vector2& cp = checkpoints[cpId];
-    return distSqr(a.Position(), cp) < distSqr(b.Position(), cp);
-}
-
-Vector2 ComputeInterceptionTarget(const Pod& p, const Pod& o, const vector<Vector2>& checkpoints)
-{
-    // can we intercept o on its way to its current checkpoint ?
-    const bool goForO = [&]() -> bool
-    {
-        const Vector2 cp = checkpoints[o.CheckpointId()];
-        const Vector2 oTrajectory = (cp - p.Position());
-
-        const Vector2 po = (o.Position() - p.Position());
-
-        // must be in opposite directions
-        if (dot(po, oTrajectory) > 0)
-            return false;
-
-        // must be closer to checkpoint than p
-        if (distSqr(p.Position(), cp) > distSqr(o.Position(), cp))
-            return false;
-
-        return true;
-    }();
-    if (goForO)
-        return o.Position() + 3.f * o.Speed();
-
-
-    // let's look for the next checkpoint where we can wait for p
-    float oDistance = 0; // distance it takes o to reach current oPos (going through checkpoints)
-    Vector2 oPos = o.Position();
-    int i = 0;
-    while (i<checkpoints.size())
-    {
-        // try 1 checkpoint further
-        const int cpId = (o.CheckpointId()+i) % (checkpoints.size());
-        const Vector2 nextCp = checkpoints[cpId];
-
-        oDistance += dist(oPos, nextCp);
-        const float pDistance = dist(p.Position(), nextCp);
-
-        oPos = nextCp;
-        ++i;
-
-        if (pDistance < oDistance)
-            break;
-    }
-    return oPos;
+    return (std::rand() % (b-a)) + a;
 }
 
 int main()
 {
-    vector<Pod> myPods(2);
-    vector<Pod> opponentPods(2);
+    Simulation simulation;
+    Vector2 firstCheckpoint = simulation.InitCheckpointsFromInput();
 
-    // read checkpoint information
-    int laps;
-    int checkpointCount;
-    {
-        cin >> laps; cin.ignore();
-        cin >> checkpointCount; cin.ignore();
-    }
-    vector<Vector2> checkpoints(checkpointCount);
-    for (int i = 0; i < checkpointCount; i++)
-    {
-        int checkpointX;
-        int checkpointY;
-        cin >> checkpointX >> checkpointY; cin.ignore();
-        checkpoints[i] = Vector2(checkpointX, checkpointY);
-    }
-    const int checkpointToBoost = ComputeBestBoostIndex(checkpoints);
+    vector<Pod> pods(4);
 
-    // game loop
+    int step=0;
     while (1)
     {
-        for (int i = 0; i < 2; i++)
-            myPods[i].UpdatePodFromInput();
-        for (int i = 0; i < 2; i++)
-            opponentPods[i].UpdatePodFromInput();
-
-        const int racingPodIndex = IsAhead(myPods[0], myPods[1], checkpoints) ? 0 : 1;
-        const int opponentPodToInterceptIndex = IsAhead(opponentPods[0], opponentPods[1], checkpoints) ? 0 : 1;
-
-        for (int i=0; i<2; i++)
+        for (int i=0; i<4; i++)
         {
-            cerr << endl << "=== Pod " << i << " ==========" << endl;
-            Pod& p = myPods[i];
-
-            p.SetTarget(checkpoints[p.CheckpointId()]);
-
-            if (i==racingPodIndex)
+            UpdatePodFromInput(pods[i], i);
+            if (step == 0) // first turn, override the angle
             {
-                cerr << "going to checkpoint" << p.CheckpointId() << endl;
-                p.SetTarget(checkpoints[p.CheckpointId()]);
-
-                if (ShouldUseShield(p, myPods[1-i]))
-                    p.RequestShield();
+                const Vector2 dir = (firstCheckpoint - pods[i].position).normalized();
+                float a = acos(dir.x) * 180.f / PI;
+                if(dir.y<0) a = (360.f - a);
+                pods[i].angle = a;
             }
-            else
-            {
-                cerr << "intercepting enemy pod " << opponentPodToInterceptIndex << endl;
-                const Pod& o = opponentPods[opponentPodToInterceptIndex];
-
-                const Vector2 interceptionTarget = ComputeInterceptionTarget(p, o, checkpoints);
-                p.SetTarget(interceptionTarget);
-            }
-
-            if( ShouldUseShield(p, opponentPods[0])
-                || ShouldUseShield(p, opponentPods[1]))
-                p.RequestShield();
-
-            ComputeThrust(p, checkpointToBoost);
+            //print(pods[i]);
         }
 
-        myPods[0].output();
-        myPods[1].output();
+        // let's try a random solution
+        Solution s;
+        {
+            for (int i=0; i<2; i++)
+            {
+                Move& m = s.turns[0].moves[i];
+                m.rotation = rnd(-maxRotation, maxRotation);
+                m.thrust = rnd(0, maxThrust);
+                m.shield = rnd(0, 100) > 90;
+                m.boost = rnd(0,100) > 90;
+            }
+
+            vector<Pod> podsCopy = pods;
+            simulation.TestSolution(podsCopy, s);
+        }
+
+        ConvertSolutionToOutput(s, pods);
+
+        ++step;
     }
 }
