@@ -12,6 +12,9 @@ constexpr int maxRotation = 18;
 
 constexpr float checkpointRadius = 600.f;
 constexpr float checkpointRadiusSqr = checkpointRadius * checkpointRadius;
+
+constexpr float podRadius = 400.f;
+constexpr float podRadiusSqr = podRadius * podRadius;
 constexpr float PI = 3.14159f;
 
 // -------------------------------------------------------------------
@@ -98,9 +101,75 @@ void ManageShield(bool turnOn, Pod& p)
     --p.shieldCd;
 }
 
+int Mass(const Pod& p)
+{
+    if (p.shieldCd == 4)
+        return 10;
+    return 1;
+}
+
+float CollisionTime(Pod& p1, Pod& p2)
+{
+    const Vector2 dP = (p2.position - p1.position);
+    const Vector2 dS = (p2.speed - p1.speed);
+
+    constexpr float eps = 0.000001f; // float precision...
+    if (dot(dS,dS) < eps)
+        return INFINITY;
+
+    // we're looking for t such that:
+    // |            p2(t)           -           p1(t)           | < |2*podRadiusSqr|
+    // |(p2.position + t*p2.speed)  - (p1.position + t*p1.speed)| < |2*podRadiusSqr|
+    // |(p2.position - p1.position) -  t*(p2.speed - p1.speed)  | < |2*podRadiusSqr|
+    // |         dP                 +            t*dS           | < |2*podRadiusSqr|
+    // t^2 dS^2 + t 2dPdS + dP^2 < 4 podRadiusSqr^2
+    // t^2  a   + t   b   +   c      = 0;
+    const float a = dot(dS, dS);
+    const float b = -2.f*dot(dP, dS);
+    const float c = dot(dP,dP) - 4.f*podRadiusSqr;
+
+    if (a < eps)
+        return INFINITY;
+
+    const float delta = b*b - 4.f*a*c;
+    if (delta < 0.f)
+        return INFINITY;
+
+    const float t = (b - sqrt(delta)) / (2.f * a);
+    if (t <= eps)
+        return INFINITY;
+
+    return t;
+}
+
+void Rebound(Pod& a, Pod& b)
+{
+    // https://en.wikipedia.org/wiki/Elastic_collision#Two-dimensional_collision_with_two_moving_objects
+    const float mA = Mass(a);
+    const float mB = Mass(b);
+
+    const Vector2 dP = b.position - a.position;
+    const float AB = dist(a.position, b.position);
+
+    const Vector2 u = (1.f / AB) * dP; // rebound direction
+
+    const Vector2 dS = b.speed - a.speed;
+
+    const float m = (mA * mB) / (mA + mB);
+    const float k = dot(dS, u);
+
+    const float impulse = -2.f * m * k;
+    cerr << "impulse: " << impulse << endl;
+    constexpr float minImpulse = 120.f;
+    const float impulseToUse = clamp(impulse, -minImpulse, minImpulse);
+
+    a.speed += (-1.f/mA) * impulse * u;
+    b.speed += (1.f/mB) * impulse * u;
+}
+
 void print(const Pod& p)
 {
-    //if(p.id != 0) return;
+    //if(p.id != 1) return;
 
     cerr << "position: " << p.position << endl;
     cerr << "speed:    " << p.speed << endl;
@@ -176,12 +245,12 @@ class Simulation
             return checkpoints[1];
         }
 
-        int TestSolution(vector<Pod>& pods, Solution s)
+        int TestSolution(vector<Pod>& pods, Solution s, int step)
         {
             for (int i=0; i<SIMULATIONTURNS; i++)
             {
                 cerr << "====================" << endl;
-                cerr << "turn: " << i << endl;
+                cerr << "turn: " << step << " + " << i << endl;
                 cerr << "====================" << endl;
                 PlayOneTurn(pods, s.turns[i]);
             }
@@ -210,6 +279,7 @@ class Simulation
             for (int i=0; i<2; i++)
             {
                 Pod& p = pods[i];
+                //print(p);
 
                 const int rotation = turn.moves[i].rotation;
                 //cerr << "pod " << p.id << " rotates by " << rotation << endl;
@@ -246,19 +316,49 @@ class Simulation
         }
         void Move(vector<Pod>& pods)
         {
-            for (Pod& p : pods)
-                p.position += p.speed;
-
-            // TODO: manage collisions between pods here
-
-            // collisions with checkpoints
-            for (Pod& p : pods)
+            float t = 0.f;
+            constexpr float turnEnd = 1.f;
+            while (t < turnEnd)
             {
-                if (distSqr(p.position, checkpoints[p.checkpointId]) < checkpointRadiusSqr)
+                Pod* a = nullptr;
+                Pod* b = nullptr; // first pods to collide with each other
+                float dt = turnEnd - t;
+                for (int i=0; i<4; i++)
                 {
-                    p.checkpointId = (p.checkpointId + 1) % checkpointCount;
-                    ++p.checkpointsPassed;
+                    for (int j=i+1; j<4; j++)
+                    {
+                        const float collisionTime = CollisionTime(pods[i], pods[j]);
+                        if ( (t+collisionTime < turnEnd) && (collisionTime < dt) )
+                        {
+                            dt = collisionTime;
+                            a = &pods[i];
+                            b = &pods[j];
+                        }
+                    }
                 }
+
+                // move all the pods until the date we selected
+                for (Pod& p : pods)
+                {
+                    p.position += dt * p.speed;
+
+                    // checkpoints (do we need to be more accurate?)
+                    if (distSqr(p.position, checkpoints[p.checkpointId]) < checkpointRadiusSqr)
+                    {
+                        p.checkpointId = (p.checkpointId + 1) % checkpointCount;
+                        ++p.checkpointsPassed;
+                    }
+                }
+
+                // a and b are colliding -> elastic collision
+                if (a != nullptr && b != nullptr)
+                {
+                    cerr << "collision at t=" << t << " + dt=" << dt;
+                    cerr << " between "<<a->id<<" and "<<b->id<<endl;
+                    Rebound(*a, *b);
+                }
+
+                t+=dt;
             }
         }
         void Friction(vector<Pod>& pods)
@@ -275,7 +375,7 @@ class Simulation
                 p.speed = Vector2{ (int) p.speed.x, (int) p.speed.y };
                 p.position = Vector2{round(p.position.x), round(p.position.y)};
 
-                print(p);
+                //print(p);
             }
         }
 };
@@ -359,7 +459,7 @@ int main()
             }
 
             vector<Pod> podsCopy = pods;
-            simulation.TestSolution(podsCopy, s);
+            simulation.TestSolution(podsCopy, s, step);
         }
 
         ConvertSolutionToOutput(s, pods);
