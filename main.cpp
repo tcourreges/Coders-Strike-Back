@@ -4,8 +4,10 @@
 #include <algorithm>
 #include <math.h>
 #include <cstdlib>
+#include <chrono>
 
 using namespace std;
+using namespace std::chrono;
 
 constexpr int maxThrust = 100;
 constexpr int maxRotation = 18;
@@ -91,6 +93,8 @@ struct Pod
     // boost/shield
     bool canBoost = true;
     int shieldCd = 0;
+
+    int score = 0;
 };
 
 void ManageShield(bool turnOn, Pod& p)
@@ -159,7 +163,7 @@ void Rebound(Pod& a, Pod& b)
     const float k = dot(dS, u);
 
     const float impulse = -2.f * m * k;
-    cerr << "impulse: " << impulse << endl;
+    //cerr << "impulse: " << impulse << endl;
     constexpr float minImpulse = 120.f;
     const float impulseToUse = clamp(impulse, -minImpulse, minImpulse);
 
@@ -192,29 +196,48 @@ void UpdatePodFromInput(Pod& p, int id)
     if (p.checkpointId != nextCheckPointId)
         ++p.checkpointsPassed;
     p.checkpointId = nextCheckPointId;
+
+    //print(p);
 }
 
-// move of 1 pod, 1 turn
+constexpr int SIMULATIONTURNS = 4;
 struct Move
 {
     int rotation = 0; // -maxRotation, maxRotation
-    int thrust = 0;; // 0, 100
+    int thrust = 0; // 0, 100
     bool shield = false;
     bool boost = false;
 };
-
-// all the moves of 1 turn
 struct Turn
 {
-    Move moves[2];
-};
+    vector<Move> moves = vector<Move>(2);
 
-#define SIMULATIONTURNS 1
+    Move& operator[](size_t idx)             { return moves[idx]; }
+    const Move& operator[](size_t idx) const { return moves[idx]; }
+};
 // all the moves to perform the next SIMULATIONTURNS turns
 struct Solution
 {
-    Turn turns[SIMULATIONTURNS];
+    vector<Turn> turns = vector<Turn>(SIMULATIONTURNS);
+
+    Turn& operator[](size_t idx)             { return turns[idx]; }
+    const Turn& operator[](size_t idx) const { return turns[idx]; }
+
+    int score = -1;
 };
+
+void print(const Solution& s)
+{
+    for(int t=0; t<SIMULATIONTURNS; t++)
+    {
+        for(int i=0; i<2; i++)
+        {
+            const Move& m = s[t][i];
+            cerr << m.rotation << "     " << m.thrust << endl;
+        }
+        cerr << endl;
+    }
+}
 
 class Simulation
 {
@@ -224,6 +247,9 @@ class Simulation
         int maxCheckpoints;
 
     public:
+        int MaxCheckpoints() { return maxCheckpoints; }
+        const vector<Vector2>& Checkpoints() { return checkpoints; }
+
         Vector2 InitCheckpointsFromInput()
         {
             int laps;
@@ -245,31 +271,20 @@ class Simulation
             return checkpoints[1];
         }
 
-        int TestSolution(vector<Pod>& pods, Solution s, int step)
+        int PlaySolution(vector<Pod>& pods, Solution s)
         {
             for (int i=0; i<SIMULATIONTURNS; i++)
             {
-                cerr << "====================" << endl;
-                cerr << "turn: " << step << " + " << i << endl;
-                cerr << "====================" << endl;
-                PlayOneTurn(pods, s.turns[i]);
+                PlayOneTurn(pods, s[i]);
             }
-
-            return RateSolution(pods);
         }
 
     private:
-        int RateSolution(vector<Pod>& pods)
-        {
-            // TODO
-            return 0;
-        }
-
         void PlayOneTurn(vector<Pod>& pods, const Turn& moves)
         {
             Rotate(pods, moves);
             Accelerate(pods, moves);
-            Move(pods);
+            UpdatePositions(pods);
             Friction(pods);
             EndTurn(pods);
         }
@@ -279,9 +294,10 @@ class Simulation
             for (int i=0; i<2; i++)
             {
                 Pod& p = pods[i];
+                const Move& m = turn[i];
                 //print(p);
 
-                const int rotation = turn.moves[i].rotation;
+                const int rotation = m.rotation;
                 //cerr << "pod " << p.id << " rotates by " << rotation << endl;
                 p.angle = (p.angle + rotation) % 360;
             }
@@ -291,9 +307,10 @@ class Simulation
             for (int i=0; i<2; i++)
             {
                 Pod& p = pods[i];
+                const Move& m = turn[i];
 
                 // shield
-                ManageShield(turn.moves[i].shield, p);
+                ManageShield(m.shield, p);
                 if (p.shieldCd > 0)
                     continue; // no thrust this turn
 
@@ -302,10 +319,10 @@ class Simulation
 
                 //cerr << direction << endl;
 
-                int thrust = turn.moves[i].thrust;
+                int thrust = m.thrust;
 
                 //boost
-                if (p.canBoost && turn.moves[i].boost)
+                if (p.canBoost && m.boost)
                 {
                     thrust = 650;
                     p.canBoost = false;
@@ -314,7 +331,7 @@ class Simulation
                 p.speed += thrust * direction;
             }
         }
-        void Move(vector<Pod>& pods)
+        void UpdatePositions(vector<Pod>& pods)
         {
             float t = 0.f;
             constexpr float turnEnd = 1.f;
@@ -353,8 +370,8 @@ class Simulation
                 // a and b are colliding -> elastic collision
                 if (a != nullptr && b != nullptr)
                 {
-                    cerr << "collision at t=" << t << " + dt=" << dt;
-                    cerr << " between "<<a->id<<" and "<<b->id<<endl;
+                    //cerr << "collision at t=" << t << " + dt=" << dt;
+                    //cerr << " between "<<a->id<<" and "<<b->id<<endl;
                     Rebound(*a, *b);
                 }
 
@@ -382,27 +399,31 @@ class Simulation
 
 void ConvertSolutionToOutput(const Solution& sol, vector<Pod>& pods)
 {
-    // get the first turn
-    const Turn t = sol.turns[0];
+    const int t = 0; // first turn
 
     for (int i=0; i<2; i++)
     {
         const Pod& p = pods[i];
+        const Move& m = sol[t][i];
 
         // generate coordinates from the rotation
-        const float angle = (p.angle + t.moves[i].rotation) % 360;
+        cerr << "rotation: " << m.rotation;;
+
+        const float angle = (p.angle + m.rotation) % 360;
         const float angleRad = angle * PI / 180.f;
 
         const Vector2 direction{10000*cos(angleRad),10000*sin(angleRad)};
         const Vector2 target = p.position + direction;
         cout << round(target.x) << " " << round(target.y) << " ";
 
-        if (t.moves[i].shield)
+        if (m.shield)
             cout << "SHIELD";
-        else if (t.moves[i].boost)
+        else if (m.boost)
             cout << "BOOST";
         else
-            cout << t.moves[i].thrust;
+            cout << m.thrust;
+            cerr << " thrust: " << m.thrust << endl;
+
         cout << endl;
     }
 
@@ -411,16 +432,233 @@ void ConvertSolutionToOutput(const Solution& sol, vector<Pod>& pods)
     for (int i=0; i<2; i++)
     {
         Pod& p = pods[i];
-        ManageShield(t.moves[i].shield, p);
+        const Move& m = sol[0][i];
 
-        if (p.shieldCd == 0 && t.moves[i].boost)
+        ManageShield(m.shield, p);
+
+        if (p.shieldCd == 0 && m.boost)
             p.canBoost = false;
     }
 }
 
+// https://software.intel.com/en-us/articles/fast-random-number-generator-on-the-intel-pentiumr-4-processor
+// apparently much faster than std::rand
+inline int fastrand()
+{
+    static unsigned int g_seed = 100;
+    g_seed = (214013*g_seed+2531011);
+    return (g_seed>>16)&0x7FFF;
+}
 inline int rnd(int a, int b)
 {
-    return (std::rand() % (b-a)) + a;
+    return (fastrand() % (b-a)) + a;
+}
+
+constexpr int SOLUTIONCOUNT = 6;
+
+class Solver
+{
+    private:
+        vector<Solution> solutions;
+        Simulation* sim;
+
+
+    public:
+        Solver(Simulation* parSimulation)
+        {
+            sim = parSimulation;
+
+            solutions.resize(2*SOLUTIONCOUNT);
+            for (int s=0; s<SOLUTIONCOUNT; s++)
+            {
+                for (int t=0; t<SIMULATIONTURNS; t++)
+                {
+                    for (int i=0; i<2; i++)
+                    {
+                        Move& m = solutions[s][t][i];
+                        Randomize(m);
+                    }
+                }
+            }
+
+            // hack: just set the boost here if possible, don't waste time later since there's only 1 boost per race anyway...
+            const float d = dist(sim->Checkpoints()[0], sim->Checkpoints()[1]);
+            if (d < 3000)
+                return;
+            cerr << "Boosting the first turn" << endl;
+            for (int i=0; i<2; i++)
+            {
+                for (int s=0; s<SOLUTIONCOUNT; ++s)
+                    solutions[s][0][i].boost = true;
+            }
+        }
+
+        Solution Solve(const vector<Pod>& pods, int time)
+        {
+            auto start = high_resolution_clock::now();
+
+            // init
+            for (int i=0; i<SOLUTIONCOUNT; ++i)
+            {
+                Solution& s = solutions[i];
+                ShiftByOneTurn(s);
+                ComputeScore(s, pods);
+            }
+
+            int step = 0;
+            while(1)
+            {
+                for (int i=0; i<SOLUTIONCOUNT; ++i)
+                {
+                    Solution& newSol = solutions[SOLUTIONCOUNT+i];
+                    newSol = solutions[i];
+                    Mutate(newSol);
+                    ComputeScore(newSol, pods);
+                }
+
+                // sort the solutions by score
+                std::sort( solutions.begin(), solutions.end(),
+                          [](const Solution& a, const Solution& b) { return a.score > b.score; }
+                         );
+                ++step;
+
+                // time's up
+                auto now = high_resolution_clock::now();
+                auto d = std::chrono::duration_cast<milliseconds>(now - start);
+                if (d.count() >= time)
+                    break;
+            }
+
+            cerr << step << " evolution steps - best score: " << solutions[0].score << endl;
+            return solutions[0];
+        }
+
+    private:
+        void Randomize(Move& m, bool modifyAll = true)
+        {
+            // if !all, we need to select which value to modify
+
+            // TODO: find a cleaner way to rewrite this (but keep the probabilities compile time)...
+            constexpr int all=-1, rotation=0, thrust=1, shield=2, boost=3;
+            constexpr int         pr=5      , pt=pr+5,  ps=pt+1,  pb=ps+0;
+
+            const int i = modifyAll ? -1 : rnd(0, pb);
+            const int valueToModify = [i]() -> int
+            {
+                if (i == -1)
+                    return true;
+                if (i<=pr)
+                    return rotation;
+                if (i<=pt)
+                    return thrust;
+                if (i<=ps)
+                    return shield;
+                return boost;
+            }();
+            auto modifyValue = [valueToModify](int parValue)
+            {
+                if(valueToModify == all)
+                    return true;
+                return valueToModify == parValue;
+            };
+
+            if (modifyValue(rotation))
+            {
+                const int r = rnd(-2*maxRotation, 3*maxRotation);
+                if (r > 2*maxRotation)
+                    m.rotation = 0;
+                else
+                    m.rotation = clamp(r, -maxRotation, maxRotation);
+            }
+            if (modifyValue(thrust))
+            {
+                const int r = rnd(-0.5f * maxThrust, 2*maxThrust);
+                m.thrust = clamp(r, 0, maxThrust);
+            }
+            if (modifyValue(shield))
+            {
+                m.shield = !m.shield;
+            }
+            if (modifyValue(boost))
+            {
+                m.boost = !m.boost;
+            }
+        }
+
+        void ShiftByOneTurn(Solution& s)
+        {
+            for (int t=1; t<SIMULATIONTURNS; t++)
+                for (int i=0; i<2; i++)
+                    s[t-1][i] = s[t][i];
+
+            // create a new random turn at the end
+            for (int i=0; i<2; i++)
+            {
+                Move& m = s[SIMULATIONTURNS-1][i];
+                Randomize(m);
+            }
+        }
+
+        void Mutate(Solution& s)
+        {
+            // mutate one value for a random t,i
+            int k = rnd(0, 2*SIMULATIONTURNS);
+            Move& m = s[k/2][k%2];
+
+            int h = rnd(0,1);
+            Randomize(m, false);
+        }
+
+        int ComputeScore(Solution& sol, const vector<Pod>& pods)
+        {
+            vector<Pod> podsCopy = pods;
+            sim->PlaySolution(podsCopy, sol);
+            sol.score = RateSolution(podsCopy);
+            return sol.score;
+        }
+        int RateSolution(vector<Pod>& pods)
+        {
+            auto podScore = [&](const Pod& p) -> int
+            {
+                // the max distance between 2 pods in the map (size 16k*9k) is about 18k
+                // we rate each checkpoint passed higher than that:
+                constexpr int cpFactor = 30000;
+                const int distToCp = dist(p.position, sim->Checkpoints()[p.checkpointId]);
+                return cpFactor*p.checkpointsPassed - distToCp;
+            };
+            for (Pod& p : pods)
+                p.score = podScore(p);
+
+            int myRacerIndex = (pods[0].score > pods[1].score) ? 0 : 1;
+            const Pod& myRacer = pods[myRacerIndex];
+            const Pod& myInterceptor = pods[1-myRacerIndex];
+
+            const Pod& opponentRacer = (pods[2].score > pods[3].score) ? pods[2] : pods[3];
+
+            if (myRacer.checkpointsPassed > sim->MaxCheckpoints())
+                return INFINITY; // I won
+
+            if (opponentRacer.checkpointsPassed > sim->MaxCheckpoints())
+                return -INFINITY; // opponent won
+
+            // how far ahead are we?
+            const int aheadScore = myRacer.score - opponentRacer.score;
+
+            // can my interceptor block the opponent racer?
+            const Vector2 opponentCheckpoint = sim->Checkpoints()[opponentRacer.checkpointId];
+            const int interceptorScore = -dist(myInterceptor.position, opponentCheckpoint);
+
+            constexpr int aheadBias = 2;
+            return aheadScore*aheadBias + interceptorScore;
+        }
+};
+
+void OverrideAngle(Pod& p, const Vector2& target)
+{
+    const Vector2 dir = (target - p.position).normalized();
+    float a = acos(dir.x) * 180.f / PI;
+    if(dir.y<0) a = (360.f - a);
+    p.angle = a;
 }
 
 int main()
@@ -428,6 +666,7 @@ int main()
     Simulation simulation;
     Vector2 firstCheckpoint = simulation.InitCheckpointsFromInput();
 
+    Solver solver{ &simulation };
     vector<Pod> pods(4);
 
     int step=0;
@@ -436,32 +675,12 @@ int main()
         for (int i=0; i<4; i++)
         {
             UpdatePodFromInput(pods[i], i);
-            if (step == 0) // first turn, override the angle
-            {
-                const Vector2 dir = (firstCheckpoint - pods[i].position).normalized();
-                float a = acos(dir.x) * 180.f / PI;
-                if(dir.y<0) a = (360.f - a);
-                pods[i].angle = a;
-            }
-            //print(pods[i]);
+            if (step == 0)
+                OverrideAngle(pods[i], firstCheckpoint);
         }
 
-        // let's try a random solution
-        Solution s;
-        {
-            for (int i=0; i<2; i++)
-            {
-                Move& m = s.turns[0].moves[i];
-                m.rotation = rnd(-maxRotation, maxRotation);
-                m.thrust = rnd(0, maxThrust);
-                m.shield = rnd(0, 100) > 90;
-                m.boost = rnd(0,100) > 90;
-            }
-
-            vector<Pod> podsCopy = pods;
-            simulation.TestSolution(podsCopy, s, step);
-        }
-
+        const int availableTime = (step==0) ? 500 : 75;
+        const Solution& s = solver.Solve(pods, availableTime*.95f);
         ConvertSolutionToOutput(s, pods);
 
         ++step;
